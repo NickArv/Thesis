@@ -1,20 +1,21 @@
 import os
 import cv2
+import keras
 import pandas as pd
+from keras import regularizers
+from keras.optimizers import Adam
+from keras.preprocessing.image import ImageDataGenerator
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
-from keras.models import Sequential , Model
-from keras.layers import Dense, Conv2D, MaxPooling2D, Flatten , Dropout
-from keras.regularizers import l1
+from keras.models import Sequential
+from keras.layers import Dense, Conv2D, MaxPooling2D, Flatten
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
-import math
 from keras.layers import Dropout, BatchNormalization
-from keras import regularizers
+
 
 # Section 1: Importing the Excel file and filtering the DataFrame
 
@@ -39,8 +40,7 @@ print("Updated DataFrame shape:", df.shape)
 # Section 2: Data preprocessing
 
 # Keep only the necessary columns
-columns_to_keep = ['id', 'gender', 'articleType', 'baseColour', 'season', 'year',
-                   'usage', 'productDisplayName']
+columns_to_keep = ['id', 'gender', 'masterCategory', 'subCategory', 'articleType', 'baseColour', 'season', 'usage', ]
 df = df[columns_to_keep]
 
 # Preprocess the columns
@@ -57,11 +57,18 @@ df['baseColour'] = df['baseColour'].str.replace('[^\w\s]', '')
 df['season'] = df['season'].str.replace('[^\w\s]', '')
 df['usage'] = df['usage'].str.replace('[^\w\s]', '')
 
+
 # Perform label encoding for categorical columns
 label_encoder = LabelEncoder()
+num_classes_dict = {}  # To store the number of classes for each category
 categorical_columns = ['gender', 'articleType', 'baseColour', 'season', 'usage']
+
 for column in categorical_columns:
     df[column] = label_encoder.fit_transform(df[column])
+    num_classes_dict[column] = len(label_encoder.classes_)
+
+# Calculate the total number of unique classes across all categorical columns
+total_classes = sum(num_classes_dict.values())
 
 print("Preprocessed data shape:", df.shape)
 
@@ -73,7 +80,17 @@ df.to_feather('preprocessed_data.feather')
 # Folder path containing the photos
 photos_folder = 'images'
 
-# Load photos from the folder
+# Load photos from the folder using data augmentation
+datagen = ImageDataGenerator(
+    rotation_range=30,
+    width_shift_range=0.3,
+    height_shift_range=0.3,
+    shear_range=0.3,
+    zoom_range=0.3,
+    horizontal_flip=True,
+    fill_mode='nearest'
+)
+
 photos = []
 valid_rows = []
 
@@ -86,6 +103,9 @@ for filename in os.listdir(photos_folder):
             if photo is not None:
                 photos.append(photo)
                 valid_rows.append(photo_id)
+
+
+
 
 # Filter the DataFrame based on valid rows
 df = df[df['id'].isin(valid_rows)]
@@ -114,6 +134,16 @@ for idx, row in df.iterrows():
         reshaped_photo = normalized_photo.reshape(64, 64, 3)
         processed_photos.append(reshaped_photo)
         valid_rows.append(photo_id)
+
+
+ # Apply data augmentation
+        augmented_photos = []
+        for _ in range(5):  # You can adjust the number of augmented samples
+            augmented_photo = datagen.random_transform(reshaped_photo)
+            augmented_photos.append(augmented_photo)
+
+        photos.extend(augmented_photos)
+        valid_rows.extend([photo_id] * len(augmented_photos))
 
 # Convert the processed photos to a numpy array
 processed_photos = np.array(processed_photos)
@@ -156,78 +186,116 @@ test_categorical_encoded = encoder.transform(test_df[categorical_columns])
 train_images_reshaped = train_images.reshape(train_images.shape[0], 64, 64, 3)
 test_images_reshaped = test_images.reshape(test_images.shape[0], 64, 64, 3)
 
-# Create a shared backbone network (for feature extraction)
-shared_backbone = Sequential()
-shared_backbone.add(keras.layers.Conv2D(16, (3, 3), activation='relu', input_shape=(64, 64, 3), padding='same' , kernel_regularizer=l1(0.2))) ,
-shared_backbone.add(keras.layers.MaxPooling2D(2,2)) ,
-#shared_backbone.add(keras.layers.Conv2D(32,(3,3),activation = "relu") ) ,
-shared_backbone.add(keras.layers.Conv2D(64, 3, activation='relu', padding='same' , kernel_regularizer=l1(0.2))) ,
-#shared_backbone.add(keras.layers.MaxPooling2D(2,2)) ,
-#shared_backbone.add(keras.layers.Conv2D(64,(3,3),activation = "relu")) ,
-shared_backbone.add(keras.layers.BatchNormalization())
-#shared_backbone.add(keras.layers.MaxPooling2D(2,2)) ,
-#shared_backbone.add(keras.layers.BatchNormalization())
-#shared_backbone.add(keras.layers.Conv2D(128,(3,3),activation = "relu")) ,
-#shared_backbone.add(keras.layers.MaxPooling2D(2,2)) ,
-shared_backbone.add(keras.layers.Flatten()) ,
-shared_backbone.add(keras.layers.Dense(550,activation="relu")) ,
-#shared_backbone.add(keras.layers.Dropout(0.1,seed = 2019)) ,
-#shared_backbone.add(keras.layers.Dense(400,activation ="relu")) ,
-#shared_backbone.add(keras.layers.Dropout(0.3,seed = 2019)) ,
-#shared_backbone.add(keras.layers.Dense(300,activation="relu")) ,
-shared_backbone.add(keras.layers.Dropout(0.4,seed = 2019)),
-#shared_backbone.add(keras.layers.Dense(200,activation ="relu" ,kernel_regularizer=l1(0.2))),
-#shared_backbone.add(keras.layers.Dropout(0.2,seed = 2019)),
-#shared_backbone.add(keras.layers.BatchNormalization())
-shared_backbone.add(Dense(77, activation='softmax', )) ,
+# Prepare the input data for the model
+input_shapes = (64, 64, 3 + len(categorical_columns))
+train_inputs = np.concatenate(
+    (train_images_reshaped, np.tile(train_categorical_encoded[:, np.newaxis, np.newaxis, :len(categorical_columns)], (1, 64, 64, 1))),
+    axis=-1)
+test_inputs = np.concatenate(
+    (test_images_reshaped, np.tile(test_categorical_encoded[:, np.newaxis, np.newaxis, :len(categorical_columns)], (1, 64, 64, 1))),
+    axis=-1)
 
-# Create a separate head for gender prediction
-gender_head = Sequential()
-gender_head.add(Dense(128, activation='relu'))
-gender_head.add(Dense(1, activation='sigmoid'))  # Binary classification for gender
+print("Train inputs shape:", train_inputs.shape)
+print("Test inputs shape:", test_inputs.shape)
 
-# Connect the shared backbone and gender head
-shared_backbone_output = shared_backbone(shared_backbone.input)
-gender_output = gender_head(shared_backbone_output)
+# Section 4: Build and train the model
 
-# Create a model for gender prediction
-gender_model = Model(inputs=shared_backbone.input, outputs=gender_output)
+# Define model architecture
+model = Sequential()
+model.add(Conv2D(32, (3, 3), activation='relu', input_shape=input_shapes, padding='same'))
+model.add(Dropout(0.3))
+model.add(BatchNormalization())
+model.add(Conv2D(64, 3, activation='relu', padding='same'))
+model.add(MaxPooling2D(2))
+model.add(Dropout(0.3))
+model.add(BatchNormalization())
+#if we had a better pc we would add these layers to get better results
 
-# Compile the gender model
-gender_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+#model.add(Conv2D(128, 3, activation='relu', padding='same'))
+#model.add(MaxPooling2D(2))
+#model.add(Dropout(0.2))
+#model.add(BatchNormalization())
+model.add(Flatten())
+model.add(Dropout(0.3))
+model.add(BatchNormalization())
+model.add(Dense(32, activation='relu' ))
+model.add(Dropout(0.4))
+model.add(BatchNormalization())
+model.add(Dense(total_classes, activation='softmax'))
 
-# Print a summary of the gender model architecture
-gender_model.summary()
 
-# Train the gender model
-history = gender_model.fit(train_images_reshaped, train_df['gender'], epochs=10, batch_size=16, )
+# Compile the model
+model.compile(optimizer=Adam(lr=0.0001),
+              loss='categorical_crossentropy',
+              metrics=['accuracy', ])
+
+# Train the model with data augmentation
+datagen.fit(train_images_reshaped)
+
+history = model.fit(
+    datagen.flow(train_inputs, train_categorical_encoded, batch_size=64),
+    steps_per_epoch=len(train_inputs) / 64,
+    epochs=8,
+    validation_data=(test_inputs, test_categorical_encoded)
+)
 
 # Section 5: Model evaluation
 
-# Evaluate the gender model
-test_loss, test_accuracy = gender_model.evaluate(test_images_reshaped, test_df['gender'])
-print("Test Loss:", test_loss)
-print("Test Accuracy:", test_accuracy)
+# Evaluate the model
+test_loss, test_accuracy = model.evaluate(test_inputs, test_categorical_encoded, verbose=2)
+print(f"Test Loss: {test_loss:.4f}")
+print(f"Test Accuracy: {test_accuracy:.4f}")
 
 # Make predictions on the test data
-gender_predictions = gender_model.predict(test_images_reshaped)
+predictions = model.predict(test_inputs)
 
-# Convert predictions to binary labels
-gender_predicted_labels = (gender_predictions > 0.2).astype(int)
-true_gender_labels = test_df['gender']
+# Save the trained model
+model.save('ImageCNN.h5')
+
+# Convert predictions from one-hot encoded format to labels
+predicted_labels = np.argmax(predictions, axis=1)
+true_labels = np.argmax(test_categorical_encoded, axis=1)
 
 # Compute the confusion matrix
-gender_confusion = confusion_matrix(true_gender_labels, gender_predicted_labels)
+confusion = confusion_matrix(true_labels, predicted_labels)
 
-# Plot the confusion matrix for gender
-plt.figure(figsize=(8, 6))
-sns.heatmap(gender_confusion, annot=True, fmt='d', cmap='Blues')
-plt.title('Gender Prediction - Confusion Matrix')
+# Plot the confusion matrix
+plt.figure(figsize=(10, 8))
+sns.heatmap(confusion, annot=True, fmt='d', cmap='Blues')
+plt.title('Confusion Matrix')
 plt.xlabel('Predicted Labels')
 plt.ylabel('True Labels')
 plt.show()
 
-# Visualization as a diagram
-pd.DataFrame(history.history).plot()
+# Plot loss
+plt.figure(figsize=(12, 4))
+
+plt.subplot(1, 2, 1)
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+
+# Plot accuracy
+plt.subplot(1, 2, 2)
+plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
 plt.show()
 
+# Get the class labels
+class_labels = label_encoder.classes_
+
+# Print the class labels along with the number of samples
+for i, (label, count) in enumerate(zip(class_labels, np.sum(test_categorical_encoded, axis=0))):
+    print(f"Label {i} ({label}): {count} samples")
+
+#In general if we had a better PC we would add more layers on the CNN (as shown in the code) and more epochs at the training section
+#This would lead to a much more accurate CNN in the fraction of time . Sadly my pc is not capable of doing
+#such demanding projects so i had to adapt to my pc's capabilities .
