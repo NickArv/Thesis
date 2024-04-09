@@ -12,6 +12,7 @@ from keras.models import Sequential
 from keras.layers import Dense, Conv2D, MaxPooling2D, Flatten
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
+from sklearn.metrics import classification_report
 import seaborn as sns
 import matplotlib.pyplot as plt
 from keras.layers import Dropout, BatchNormalization
@@ -56,7 +57,6 @@ df['articleType'] = df['articleType'].str.replace('[^\w\s]', '')
 df['baseColour'] = df['baseColour'].str.replace('[^\w\s]', '')
 df['season'] = df['season'].str.replace('[^\w\s]', '')
 df['usage'] = df['usage'].str.replace('[^\w\s]', '')
-
 
 # Perform label encoding for categorical columns
 label_encoder = LabelEncoder()
@@ -104,9 +104,6 @@ for filename in os.listdir(photos_folder):
                 photos.append(photo)
                 valid_rows.append(photo_id)
 
-
-
-
 # Filter the DataFrame based on valid rows
 df = df[df['id'].isin(valid_rows)]
 
@@ -135,8 +132,7 @@ for idx, row in df.iterrows():
         processed_photos.append(reshaped_photo)
         valid_rows.append(photo_id)
 
-
- # Apply data augmentation
+        # Apply data augmentation
         augmented_photos = []
         for _ in range(5):  # You can adjust the number of augmented samples
             augmented_photo = datagen.random_transform(reshaped_photo)
@@ -209,12 +205,6 @@ model.add(Conv2D(64, 3, activation='relu', padding='same'))
 model.add(MaxPooling2D(2))
 model.add(Dropout(0.3))
 model.add(BatchNormalization())
-#if we had a better pc we would add these layers to get better results
-
-#model.add(Conv2D(128, 3, activation='relu', padding='same'))
-#model.add(MaxPooling2D(2))
-#model.add(Dropout(0.2))
-#model.add(BatchNormalization())
 model.add(Flatten())
 model.add(Dropout(0.3))
 model.add(BatchNormalization())
@@ -222,7 +212,6 @@ model.add(Dense(32, activation='relu' ))
 model.add(Dropout(0.4))
 model.add(BatchNormalization())
 model.add(Dense(total_classes, activation='softmax'))
-
 
 # Compile the model
 model.compile(optimizer=Adam(lr=0.0001),
@@ -235,7 +224,7 @@ datagen.fit(train_images_reshaped)
 history = model.fit(
     datagen.flow(train_inputs, train_categorical_encoded, batch_size=64),
     steps_per_epoch=len(train_inputs) / 64,
-    epochs=8,
+    epochs=10,
     validation_data=(test_inputs, test_categorical_encoded)
 )
 
@@ -256,6 +245,9 @@ model.save('ImageCNN.h5')
 predicted_labels = np.argmax(predictions, axis=1)
 true_labels = np.argmax(test_categorical_encoded, axis=1)
 
+# Get the class labels
+class_labels = label_encoder.classes_
+
 # Compute the confusion matrix
 confusion = confusion_matrix(true_labels, predicted_labels)
 
@@ -266,6 +258,14 @@ plt.title('Confusion Matrix')
 plt.xlabel('Predicted Labels')
 plt.ylabel('True Labels')
 plt.show()
+
+
+# Compute classification report
+report = classification_report(true_labels, predicted_labels, labels=np.unique(true_labels))
+
+# Print the classification report
+print(report)
+
 
 # Plot loss
 plt.figure(figsize=(12, 4))
@@ -289,8 +289,7 @@ plt.legend()
 
 plt.show()
 
-# Get the class labels
-class_labels = label_encoder.classes_
+
 
 # Print the class labels along with the number of samples
 for i, (label, count) in enumerate(zip(class_labels, np.sum(test_categorical_encoded, axis=0))):
